@@ -53,6 +53,30 @@ To generate UI previews (as PNGs, upright) without touching the printer screen:
 
 ## Quick start
 
+### 1. Enable SSH on the printer
+
+SSH is **disabled by default** — turn it on from the printer's touchscreen (menu labels vary
+a little by firmware):
+
+1. Open **Settings** (gear) → **Machine** → **More Settings** → **Privacy and Security**
+   (on some firmware it's under **Settings → Network** — look for **SSH** / **SSH Settings**).
+2. If prompted, enter the **Security Password**. The first time you enable SSH you'll be
+   asked to set one (a random value is suggested — set your own and remember it). If SSH was
+   already enabled before, the security password defaults to the SSH password.
+3. Under **SSH Settings**, enable the **SSH server** and set an **SSH password**. That's what
+   you log in with; the user is **`root`**.
+4. Note the printer's **IP address** (shown on the **Network** page).
+
+Then connect from your computer:
+
+```sh
+ssh root@<printer-ip>
+```
+
+(Details: [Enable SSH on the printer](docs/INSTALL.md#enable-ssh-on-the-printer).)
+
+### 2. Install
+
 On the printer, as root, a single command:
 
 ```sh
