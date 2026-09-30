@@ -1,0 +1,30 @@
+[server]
+host: 0.0.0.0
+port: 7125
+klippy_uds_address: /opt/moonraker/printer_data/comms/klippy.sock
+
+[file_manager]
+# The vendor Klipper config dir is exposed here via a bind mount (see init/moonraker),
+# so Klipper's reported config path does not match this folder's path. Editing still
+# works; the location check is just disabled.
+check_klipper_config_path: False
+
+[machine]
+# No systemd on this device; "none" disables service actions instead of failing to load.
+provider: none
+
+[authorization]
+# Trusted LAN clients need no login. Adjust to your subnet.
+trusted_clients:
+    127.0.0.1
+    192.168.1.0/24
+# Allow the Fluidd frontend (served on the same host, port 80) to call the API.
+cors_domains:
+    *
+
+[webcam printer]
+service: mjpegstreamer
+stream_url: /camera/stream
+snapshot_url: /camera/snapshot
+target_fps: 5
+target_fps_idle: 5

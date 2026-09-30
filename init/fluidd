@@ -1,0 +1,34 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          fluidd
+# Required-Start:    $network
+# Required-Stop:     $network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Fluidd web UI + camera proxy (port 80)
+### END INIT INFO
+NAME=fluidd
+DAEMON=/opt/moonraker/python/bin/python3.11
+DAEMON_ARGS="/opt/moonraker/webui.py 80"
+PIDFILE=/var/run/fluidd.pid
+LOGFILE=/opt/moonraker/printer_data/logs/webui.log
+SSD=/sbin/start-stop-daemon
+case "$1" in
+  start)
+    echo "Starting $NAME"
+    $SSD --start --background --quiet --make-pidfile --pidfile "$PIDFILE" \
+         --exec "$DAEMON" -- $DAEMON_ARGS >> "$LOGFILE" 2>&1
+    ;;
+  stop)
+    echo "Stopping $NAME"
+    $SSD --stop --quiet --pidfile "$PIDFILE" --retry 10
+    rm -f "$PIDFILE"
+    ;;
+  restart|force-reload) $0 stop; sleep 2; $0 start ;;
+  status)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo "$NAME running (pid $(cat "$PIDFILE"))"
+    else echo "$NAME not running"; fi ;;
+  *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
+exit 0

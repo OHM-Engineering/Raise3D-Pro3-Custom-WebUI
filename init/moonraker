@@ -1,0 +1,53 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          moonraker
+# Required-Start:    $network
+# Required-Stop:     $network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Moonraker API server for Klipper
+### END INIT INFO
+NAME=moonraker
+MR=/opt/moonraker
+DAEMON=$MR/venv/bin/moonraker
+DAEMON_ARGS="$MR/moonraker/moonraker/moonraker.py -d $MR/printer_data -c $MR/printer_data/moonraker.conf"
+PIDFILE=/var/run/moonraker.pid
+LOGFILE=$MR/printer_data/logs/moonraker-console.log
+CERTIFI=$MR/venv/lib/python3.11/site-packages/certifi/cacert.pem
+SSD=/sbin/start-stop-daemon
+# Expose the vendor Klipper config dir inside Moonraker's config root as a bind
+# mount: the files stay at their original path (so Klipper's SAVE_CONFIG and the
+# stock UI keep working) but are also editable in the web UI. A bind mount is
+# used instead of a symlink because Moonraker blocks writes under the reserved
+# Klipper source tree, and resolves symlinks (a symlink would resolve into it).
+MNT=$MR/printer_data/config
+VENDOR=/opt/Raise3D/klipper-master/config
+[ -f "$CERTIFI" ] && export SSL_CERT_FILE="$CERTIFI"
+mount_config() {
+    mkdir -p "$MNT"
+    grep -q " $MNT " /proc/mounts || mount --bind "$VENDOR" "$MNT" 2>/dev/null || true
+}
+umount_config() {
+    grep -q " $MNT " /proc/mounts && umount "$MNT" 2>/dev/null || true
+}
+case "$1" in
+  start)
+    echo "Starting $NAME"
+    mount_config
+    $SSD --start --background --quiet --make-pidfile --pidfile "$PIDFILE" \
+         --exec "$DAEMON" -- $DAEMON_ARGS >> "$LOGFILE" 2>&1
+    ;;
+  stop)
+    echo "Stopping $NAME"
+    $SSD --stop --quiet --pidfile "$PIDFILE" --retry 10
+    rm -f "$PIDFILE"
+    umount_config
+    ;;
+  restart|force-reload) $0 stop; sleep 2; $0 start ;;
+  status)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      echo "$NAME running (pid $(cat "$PIDFILE"))"
+    else echo "$NAME not running"; fi ;;
+  *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
+exit 0

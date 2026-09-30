@@ -1,0 +1,344 @@
+#!/bin/sh
+#
+# Raise3D Pro3 / Pro3 HyperSpeed — one-shot installer
+# ------------------------------------------------------------------
+# Installs, alongside the stock Raise3D software (nothing here rotates the
+# X session or replaces MXCUI):
+#   * a modern Python 3.11 (portable armv7 build)
+#   * Moonraker (from source) + Fluidd on :80, with a camera proxy
+#   * an optional on-panel touch UI (rotated to match the portrait panel)
+#   * SysV init services that auto-start on boot
+#
+# Self-contained: run it from anywhere, or pipe it, as root on the printer.
+#     ./install.sh                     # everything
+#     ./install.sh --no-panel          # web UI only
+#     ./install.sh --no-webui          # panel UI only
+#     ./install.sh --subnet 192.168.1.0/24
+#
+# One-liner (from the published repo):
+#     curl -fsSL https://raw.githubusercontent.com/OHM-Engineering/Raise3D-Pro3-Custom-WebUI/main/install.sh | sh
+#     curl -fsSL https://raw.githubusercontent.com/OHM-Engineering/Raise3D-Pro3-Custom-WebUI/main/install.sh | sh -s -- --no-panel
+#
+# It downloads/builds dependencies on the device. No binaries are shipped.
+set -eu
+
+# ------------------------------------------------------------------ config
+PBS_TAG="${PBS_TAG:-20260929}"
+PY_VERSION="${PY_VERSION:-3.11.16}"
+PY_URL="${PY_URL:-https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/cpython-${PY_VERSION}+${PBS_TAG}-armv7-unknown-linux-gnueabihf-install_only_stripped.tar.gz}"
+LIBSODIUM_URL="${LIBSODIUM_URL:-https://github.com/jedisct1/libsodium/releases/download/1.0.18-RELEASE/libsodium-1.0.18.tar.gz}"
+FREETYPE_URL="${FREETYPE_URL:-https://github.com/freetype/freetype/releases/download/VER-2-13-2/freetype-2.13.2.tar.gz}"
+MOONRAKER_URL="${MOONRAKER_URL:-https://github.com/Arksine/moonraker/archive/refs/heads/master.tar.gz}"
+FLUIDD_URL="${FLUIDD_URL:-https://github.com/fluidd-core/fluidd/releases/latest/download/fluidd.zip}"
+
+MR=/opt/moonraker
+VENV="$MR/venv"
+PY="$MR/python/bin/python3.11"
+VENVPY="$VENV/bin/python"
+KL_Dir=/opt/Raise3D/klipper-master
+KLIPPY="$KL_Dir/klippy/klippy.py"
+KCFG="$KL_Dir/config/printer_raise3d_pro3.cfg"
+SOCK="$MR/printer_data/comms/klippy.sock"
+
+DO_WEBUI=1
+DO_PANEL=1
+DO_RESTART_KLIPPER=0
+SUBNET=""
+ASSUME_YES=0
+
+@@EMBED@@
+
+# ------------------------------------------------------------------ helpers
+log()  { echo "[install] $*"; }
+warn() { echo "[install] WARNING: $*" >&2; }
+die()  { echo "[install] ERROR: $*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+    cat <<'USAGE'
+Raise3D Pro3 / Pro3 HyperSpeed — one-shot installer
+
+  ./install.sh [--no-panel] [--no-webui] [--subnet X.X.X.0/24]
+               [--restart-klipper] [-y|--yes]
+
+  --no-panel         skip the on-panel touch UI
+  --no-webui         skip Moonraker + Fluidd
+  --subnet CIDR      trusted LAN subnet for Moonraker auth (auto-detected, /24)
+  --restart-klipper  restart Klipper now to activate the API socket
+  -y, --yes          no prompts
+USAGE
+    exit 0
+}
+
+# ------------------------------------------------------------------ args
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-webui) DO_WEBUI=0 ;;
+        --no-panel) DO_PANEL=0 ;;
+        --restart-klipper) DO_RESTART_KLIPPER=1 ;;
+        --subnet) shift; SUBNET="${1:-}" ;;
+        --subnet=*) SUBNET="${1#*=}" ;;
+        -y|--yes) ASSUME_YES=1 ;;
+        -h|--help) usage ;;
+        *) die "unknown option: $1 (try --help)" ;;
+    esac
+    shift
+done
+
+[ "$DO_WEBUI" = 1 ] || [ "$DO_PANEL" = 1 ] || die "nothing to do (both --no-webui and --no-panel)"
+
+# ------------------------------------------------------------------ disclaimer
+cat <<'DISCLAIMER'
+============================================================
+ DISCLAIMER — USE AT YOUR OWN RISK
+ This installs software on your printer that can move axes
+ and control heaters. A misconfiguration or a software fault
+ can DAMAGE THE PRINTER, the print surface, or the hotend,
+ and 3D printing carries fire risk. Provided WITHOUT WARRANTY
+ (see LICENSE). You are solely responsible for your printer.
+============================================================
+DISCLAIMER
+if [ "$ASSUME_YES" != 1 ]; then
+    if [ -r /dev/tty ]; then
+        printf '[install] Type "yes" to accept the risk and continue: '
+        read -r ans < /dev/tty || ans=""
+        [ "$ans" = "yes" ] || die "aborted (risk not accepted)"
+    else
+        warn "non-interactive run: continuing; you accept the risk by running this"
+    fi
+fi
+
+# ------------------------------------------------------------------ preflight
+[ "$(id -u)" = 0 ] || die "please run as root"
+for t in curl tar make gcc; do
+    have "$t" || die "missing required tool: $t"
+done
+[ -d /opt/Raise3D ] || die "this does not look like a Raise3D device (/opt/Raise3D missing)"
+[ -f "$KLIPPY" ] || die "Klipper not found at $KLIPPY"
+
+# (all auxiliary files are embedded by tools/build-installer.py)
+
+# auto-detect the LAN subnet for Moonraker auth (assumes /24) unless given
+if [ -z "$SUBNET" ]; then
+    IPADDR=$(ifconfig wlan0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
+    [ -n "$IPADDR" ] || IPADDR=$(ifconfig eth0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
+    if [ -n "$IPADDR" ]; then
+        SUBNET=$(echo "$IPADDR" | awk -F. '{print $1"."$2"."$3".0/24"}')
+    fi
+fi
+log "trusted subnet: ${SUBNET:-<sample default>}"
+
+log "creating $MR/data dirs"
+mkdir -p "$MR" "$MR/printer_data/comms" "$MR/printer_data/config" \
+         "$MR/printer_data/logs" "$MR/printer_data/database"
+
+# ================================================================== 1. Python
+log "== [1/10] Python $PY_VERSION =="
+if [ ! -x "$PY" ]; then
+    curl -k -L -f --retry 3 -o /tmp/py311.tar.gz "$PY_URL"
+    rm -rf "$MR/python"
+    tar -xzf /tmp/py311.tar.gz -C "$MR"
+fi
+"$PY" -V || die "python failed to run"
+"$PY" -c "import ssl, sqlite3, ctypes; print('[install] openssl', ssl.OPENSSL_VERSION)"
+
+# ================================================================== 2. libsodium
+log "== [2/10] libsodium =="
+if [ ! -e /usr/local/lib/libsodium.so.23 ] && [ ! -e /usr/local/lib/libsodium.so ]; then
+    curl -k -L -f --retry 3 -o /tmp/libsodium.tar.gz "$LIBSODIUM_URL"
+    ( cd /tmp && rm -rf libsodium-1.0.18 && tar -xzf libsodium.tar.gz \
+      && cd libsodium-1.0.18 && ./configure --prefix=/usr/local \
+      && make -j4 && make install )
+fi
+mkdir -p /etc/ld.so.conf.d
+echo "/usr/local/lib" > /etc/ld.so.conf.d/usr-local.conf
+[ -f /etc/ld.so.conf ] || echo "include /etc/ld.so.conf.d/*.conf" > /etc/ld.so.conf
+ldconfig || true
+
+# ================================================================== 3. venv + deps
+log "== [3/10] Moonraker venv + dependencies =="
+if [ ! -x "$VENVPY" ]; then
+    "$PY" -m venv "$VENV"
+fi
+"$VENVPY" -m pip install --upgrade pip setuptools wheel
+# the standalone interpreter's sysconfig points at a cross compiler; force gcc
+export CC=gcc CXX=g++ LDSHARED="gcc -shared"
+"$VENVPY" -m pip install \
+    pyserial==3.4 distro==1.9.0 jinja2==3.1.6 paho-mqtt==2.1.0 "apprise<=1.13.0" \
+    ldap3==2.9.1 python-periphery==2.4.1 "importlib_metadata<=9.0.0" \
+    preprocess-cancellation==0.2.1 inotify-simple==2.0.1 libnacl==2.1.0 \
+    "tornado>=6.2.0,<=6.5.8" "pillow>=9.5.0,<=12.3.0" \
+    "streaming-form-data>=1.11.0,<=2.1.0" "dbus-fast>=2.21.3,<=5.0.22" \
+    "zeroconf>=0.131.0,<=0.150.0"
+"$VENVPY" -c "from libnacl.sign import Signer; Signer(); print('[install] libnacl OK')"
+
+# ================================================================== 4. FreeType + mss
+if [ "$DO_PANEL" = 1 ]; then
+    log "== [4/10] FreeType (for the panel UI) =="
+    if [ ! -e /usr/local/freetype/lib/libfreetype.so.6 ]; then
+        curl -k -L -f --retry 3 -o /tmp/ft.tar.gz "$FREETYPE_URL"
+        ( cd /tmp && rm -rf freetype-2.13.2 && tar -xzf ft.tar.gz \
+          && cd freetype-2.13.2 \
+          && ./configure --prefix=/usr/local/freetype --without-harfbuzz --without-brotli \
+                         --without-png --without-bzip2 \
+          && make -j4 && make install )
+    fi
+    # NOTE: installed under /usr/local/freetype and versioned via LD_LIBRARY_PATH,
+    # so the system's (old) FreeType used by Xorg is never touched/re-cached.
+    "$VENVPY" -m pip install "mss==8.0.3"     # 8.x uses Xlib (9+/10 needs newer libxcb)
+    "$PY" -m pip install "mss==8.0.3" || true
+else
+    log "== [4/10] FreeType skipped (--no-panel) =="
+fi
+
+# ================================================================== 5. Klipper patch
+log "== [5/10] Enable Klipper API socket =="
+[ -f "$KLIPPY.orig-moonraker" ] || cp -a "$KLIPPY" "$KLIPPY.orig-moonraker"
+"$PY" - "$KLIPPY" "$SOCK" <<'PY'
+import sys
+path, sock = sys.argv[1], sys.argv[2]
+s = open(path).read()
+if sock in s:
+    print("[install] klippy.py already patched")
+    raise SystemExit(0)
+old = ("    start_args = {'config_file': args[0], 'apiserver': options.apiserver,\n"
+       "                  'start_reason': 'startup'}")
+new = ("    _apiserver = options.apiserver\n"
+       "    if not _apiserver:\n"
+       "        _apiserver = '%s'\n"
+       "    start_args = {'config_file': args[0], 'apiserver': _apiserver,\n"
+       "                  'start_reason': 'startup'}" % sock)
+if s.count(old) != 1:
+    print("[install] ERROR: expected klippy.py pattern not found (unsupported fork?)")
+    raise SystemExit(1)
+open(path, "w").write(s.replace(old, new))
+print("[install] patched klippy.py")
+PY
+python2 -c "compile(open('$KLIPPY').read(),'klippy.py','exec')" \
+    && log "klippy.py syntax OK" || die "klippy.py syntax check failed"
+
+# ================================================================== 6. Klipper config
+log "== [6/10] Klipper config additions =="
+[ -f "$KCFG.orig-moonraker" ] || cp -a "$KCFG" "$KCFG.orig-moonraker"
+grep -q '^\[display_status\]' "$KCFG" || printf '\n[display_status]\n' >> "$KCFG"
+if ! grep -q '^\[gcode_macro CANCEL_PRINT\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_macro CANCEL_PRINT]
+description = Cancel the current print
+rename_existing = _CANCEL_PRINT
+gcode =
+	_CANCEL_PRINT
+EOF
+fi
+
+# ================================================================== 7. Moonraker
+if [ "$DO_WEBUI" = 1 ]; then
+    log "== [7/10] Moonraker =="
+    if [ ! -d "$MR/moonraker/moonraker" ]; then
+        curl -k -L -f --retry 3 -o /tmp/moonraker.tar.gz "$MOONRAKER_URL"
+        ( cd "$MR" && rm -rf moonraker-master && tar -xzf /tmp/moonraker.tar.gz \
+          && rm -rf moonraker && mv moonraker-master moonraker )
+    fi
+    [ -e "$MR/printer_data/gcodes" ] || ln -sfn /home/root "$MR/printer_data/gcodes"
+    # Expose the vendor Klipper config dir as Moonraker's config root so it is
+    # editable in the web UI. A bind mount (not a symlink) keeps the files at
+    # their original path and outside the reserved Klipper source tree.
+    mkdir -p "$MR/printer_data/config"
+    grep -q " $MR/printer_data/config " /proc/mounts \
+        || mount --bind "$KL_Dir/config" "$MR/printer_data/config" 2>/dev/null || true
+    if [ ! -f "$MR/printer_data/moonraker.conf" ]; then
+        sed "s#192.168.1.0/24#${SUBNET:-192.168.1.0/24}#" \
+            "$HERE/config/moonraker.conf.sample" \
+            > "$MR/printer_data/moonraker.conf"
+        log "wrote moonraker.conf (trusted: ${SUBNET:-192.168.1.0/24})"
+    fi
+else
+    log "== [7/10] Moonraker skipped (--no-webui) =="
+fi
+
+# ================================================================== 8. Web UI
+if [ "$DO_WEBUI" = 1 ]; then
+    log "== [8/10] Fluidd + camera proxy =="
+    mkdir -p "$MR/www"
+    if [ ! -f "$MR/www/fluidd/index.html" ]; then
+        curl -k -L -f --retry 3 -o /tmp/fluidd.zip "$FLUIDD_URL"
+        rm -rf "$MR/www/fluidd" && mkdir -p "$MR/www/fluidd"
+        "$PY" -c "import zipfile; zipfile.ZipFile('/tmp/fluidd.zip').extractall('$MR/www/fluidd')"
+    fi
+    cp "$HERE/webui/webui.py" "$MR/webui.py"
+else
+    log "== [8/10] Web UI skipped (--no-webui) =="
+fi
+
+# ================================================================== 9. Autostart
+if [ "$DO_WEBUI" = 1 ]; then
+    log "== [9/10] Init services =="
+    cp "$HERE/init/moonraker" /etc/init.d/moonraker
+    cp "$HERE/init/fluidd"    /etc/init.d/fluidd
+    chmod +x /etc/init.d/moonraker /etc/init.d/fluidd
+    for rl in 2 3 4 5; do
+        ln -sf ../init.d/moonraker "/etc/rc$rl.d/S99moonraker"
+        ln -sf ../init.d/fluidd    "/etc/rc$rl.d/S99fluidd"
+    done
+    for rl in 0 1 6; do
+        ln -sf ../init.d/moonraker "/etc/rc$rl.d/K01moonraker"
+        ln -sf ../init.d/fluidd    "/etc/rc$rl.d/K01fluidd"
+    done
+else
+    log "== [9/10] Init services skipped (--no-webui) =="
+fi
+
+# ================================================================== 10. Panel UI
+if [ "$DO_PANEL" = 1 ]; then
+    log "== [10/10] On-panel touch UI =="
+    cp "$HERE/panel/moonui.py"     "$MR/moonui.py"
+    cp "$HERE/panel/start-ui.sh"   "$MR/start-ui.sh"
+    cp "$HERE/panel/stop-ui.sh"    "$MR/stop-ui.sh"
+    cp "$HERE/panel/render-ui.sh"  "$MR/render-ui.sh"
+    chmod +x "$MR/start-ui.sh" "$MR/stop-ui.sh" "$MR/render-ui.sh"
+    ln -sf python "$VENV/bin/moonui"     # safe process name (MXC kills "python")
+    LD_LIBRARY_PATH=/usr/local/freetype/lib:/usr/local/lib \
+        "$PY" "$MR/moonui.py" --render /tmp/ui-preview-move.png --tab move --mock >/dev/null
+    log "panel UI OK (preview rendered)"
+else
+    log "== [10/10] Panel UI skipped (--no-panel) =="
+fi
+
+# ================================================================== start
+if [ "$DO_WEBUI" = 1 ]; then
+    log "starting services"
+    /etc/init.d/fluidd start  || warn "fluidd start failed"
+    /etc/init.d/moonraker start || warn "moonraker start failed"
+fi
+
+if [ "$DO_RESTART_KLIPPER" = 1 ]; then
+    log "restarting Klipper to activate the API socket"
+    pkill -f 'klippy/klippy.py' || true
+    sleep 2
+    ( cd "$KL_Dir" && setsid python klippy/klippy.py "$KCFG" \
+        -l /opt/Raise3D/logs/system/klippy.log \
+        </dev/null >>/opt/Raise3D/logs/system/klippy.log 2>&1 & )
+    sleep 12
+    [ -S "$SOCK" ] && log "API socket present: $SOCK" || warn "socket not seen yet"
+fi
+
+# ================================================================== summary
+IPADDR=$(ifconfig wlan0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
+[ -n "$IPADDR" ] || IPADDR="<printer-ip>"
+cat <<EOF
+
+[install] Done.
+  Web UI:     http://$IPADDR/          (Fluidd)
+  Moonraker:  http://$IPADDR:7125/
+  Panel UI:   $MR/start-ui.sh   (Exit button returns to the stock UI)
+
+EOF
+if [ "$DO_RESTART_KLIPPER" = 0 ]; then
+    echo "[install] NOTE: reboot (or run this script with --restart-klipper) so the"
+    echo "[install] Klipper API socket is created; until then Moonraker shows disconnected."
+fi
+if [ "$DO_WEBUI" = 1 ] && [ -z "$SUBNET" ]; then
+    echo "[install] NOTE: could not auto-detect your subnet; re-run with"
+    echo "[install] --subnet <x.x.x.0/24> or edit moonraker.conf if the UI asks for login."
+fi

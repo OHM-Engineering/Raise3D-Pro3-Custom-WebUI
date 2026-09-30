@@ -1,0 +1,5 @@
+# Normalize to LF; the target is a Linux printer.
+* text=auto eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf

@@ -1,0 +1,26 @@
+Third-party components
+======================
+
+This repository contains only original code and configuration. It does not vendor
+any third-party binaries. The installation guide downloads/builds the following:
+
+- Klipper (https://github.com/Klipper3d/klipper) — GNU GPL v3.
+  The file klipper/enable-webhooks-socket.md documents a small patch applied to the
+  vendor's Klipper fork at install time. Klipper and any patched derivative remain
+  under the GNU GPL v3.
+
+- Moonraker (https://github.com/Arksine/moonraker) — GNU GPL v3.
+  Installed from source on the device (not vendored here).
+
+- Fluidd (https://github.com/fluidd-core/fluidd) — GNU GPL v3.
+  The static build is downloaded from its GitHub releases at install time.
+
+- CPython standalone builds (https://github.com/astral-sh/python-build-standalone) —
+  Python Software Foundation License.
+
+- libsodium (https://github.com/jedisct1/libsodium) — ISC License.
+
+- FreeType (https://freetype.org) — FreeType License / GNU GPL v2.
+
+Original code in this repository (panel/, webui/, init/, config/, scripts/, docs/)
+is licensed under the MIT License (see LICENSE).
