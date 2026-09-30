@@ -152,10 +152,8 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for details.
 - Tested on a Pro3 HyperSpeed running the vendor firmware; your mileage may vary with other
   firmware revisions. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the known
   gotchas (process‑name kills, CA bundle, `ip -json`, camera token rotation, FreeType).
-- The camera stream is the stock 1280×720 MJPEG and is fairly bandwidth‑heavy; tune it in the
-  printer's Camera settings if needed.
-- Config is edited over SSH (Moonraker's in‑UI config editor does not manage the vendor's
-  Klipper config path).
+- Klipper/Moonraker config is edited in Fluidd's built-in editor; apply changes with
+  **Save → Restart Klipper**.
 
 ---
 
