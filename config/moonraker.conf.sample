@@ -13,6 +13,13 @@ check_klipper_config_path: False
 # No systemd on this device; "none" disables service actions instead of failing to load.
 provider: none
 
+[octoprint_compat]
+# OctoPrint-compatible API (/api/version, /api/printer, /api/files/local, ...).
+# OrcaSlicer 2.3.x ("Octo/Klipper" host) and similar slicers need these to
+# connect to Moonraker. Point stream_url at the web UI camera for the camera.
+webcam_enabled: true
+stream_url: /camera/stream
+
 [authorization]
 # Trusted LAN clients need no login. Adjust to your subnet.
 trusted_clients:

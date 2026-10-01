@@ -865,6 +865,13 @@ check_klipper_config_path: False
 # No systemd on this device; "none" disables service actions instead of failing to load.
 provider: none
 
+[octoprint_compat]
+# OctoPrint-compatible API (/api/version, /api/printer, /api/files/local, ...).
+# OrcaSlicer 2.3.x ("Octo/Klipper" host) and similar slicers need these to
+# connect to Moonraker. Point stream_url at the web UI camera for the camera.
+webcam_enabled: true
+stream_url: /camera/stream
+
 [authorization]
 # Trusted LAN clients need no login. Adjust to your subnet.
 trusted_clients:
@@ -1067,6 +1074,90 @@ gcode =
 EOF
 fi
 
+# Shell-command helper: lets macros run host commands. Used below to expose a
+# RESTART_MXCUI macro so offset edits made in the web UI can be applied without
+# the on-screen wizard (MXCUI only reads its cfg files at start).
+cp "$HERE/klipper/gcode_shell_command.py" "$KL_Dir/klippy/extras/gcode_shell_command.py"
+cp "$HERE/scripts/restart-mxcui.sh" /opt/Raise3D/restart-mxcui.sh
+chmod +x /opt/Raise3D/restart-mxcui.sh
+if ! grep -q '^\[gcode_shell_command restart_mxcui\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_shell_command restart_mxcui]
+command: /opt/Raise3D/restart-mxcui.sh
+timeout: 30.
+verbose: True
+
+[gcode_macro RESTART_MXCUI]
+description = Restart the stock Raise3D touch UI (reloads settings files)
+gcode =
+	RUN_SHELL_COMMAND CMD=restart_mxcui
+EOF
+fi
+
+# Fan macros: this Klipper fork has four PWM fans ([fan] pin/pin1/pin2/pin3 =
+# left head, right head, P2, P3), and its mingled M107/P255 "all" path only
+# stops the first two, so switch each one explicitly. Shows up as a button in
+# Fluidd/MoonUI when the macro is pinned.
+if ! grep -q '^\[gcode_macro FANS_OFF\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_macro FANS_OFF]
+description = Turn off all fans (left/right head + P2 + P3)
+gcode =
+	M106 P0 S0
+	M106 P1 S0
+	M106 P2 S0
+	M106 P3 S0
+
+[gcode_macro FANS_ON]
+description = Turn all fans to 100%
+gcode =
+	M106 P0 S255
+	M106 P1 S255
+	M106 P2 S255
+	M106 P3 S255
+EOF
+fi
+
+# Head-fan reset: the HCB head fans are thermostatic and ignore host fan
+# commands (M106 P*/M5100 G* F*), so a stuck-on fan is cleared by rebooting the
+# head controller (M5100 RESET). That puts Klipper in shutdown, so the helper
+# script follows up with a FIRMWARE_RESTART and waits for ready.
+cp "$HERE/scripts/reset-heads.sh" /opt/Raise3D/reset-heads.sh
+chmod +x /opt/Raise3D/reset-heads.sh
+if ! grep -q '^\[gcode_macro RESET_HEAD_FANS\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_shell_command reset_head_fans]
+command = /opt/Raise3D/reset-heads.sh
+timeout = 60.
+verbose = False
+
+[gcode_macro RESET_HEAD_FANS]
+description = Reboot mainboard/HCB to clear stuck head fans (then auto-recovers)
+gcode =
+	RUN_SHELL_COMMAND CMD=reset_head_fans
+EOF
+fi
+
+# LED macros: the vendor light module drives both head LEDs through the HCB
+# via M355 (MXCUI's own convention: S1 = on, S0 = off).
+if ! grep -q '^\[gcode_macro LEDS_ON\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_macro LEDS_ON]
+description = Turn on the chamber LEDs (both heads)
+gcode =
+	M355 S1
+
+[gcode_macro LEDS_OFF]
+description = Turn off the chamber LEDs (both heads)
+gcode =
+	M355 S0
+EOF
+fi
+
 # ================================================================== 7. Moonraker
 if [ "$DO_WEBUI" = 1 ]; then
     log "== [7/10] Moonraker =="
@@ -1082,6 +1173,11 @@ if [ "$DO_WEBUI" = 1 ]; then
     mkdir -p "$MR/printer_data/config"
     grep -q " $MR/printer_data/config " /proc/mounts \
         || mount --bind "$KL_Dir/config" "$MR/printer_data/config" 2>/dev/null || true
+    # Also expose the stock Raise3D settings dir (e2config.cfg, hotend.cfg, ...)
+    # as a "raise3d" subfolder of the config root so it is viewable/editable.
+    mkdir -p "$MR/printer_data/config/raise3d"
+    grep -q " $MR/printer_data/config/raise3d " /proc/mounts \
+        || mount --bind /opt/Raise3D/config "$MR/printer_data/config/raise3d" 2>/dev/null || true
     if [ ! -f "$MR/printer_data/moonraker.conf" ]; then
         sed "s#192.168.1.0/24#${SUBNET:-192.168.1.0/24}#" \
             "$HERE/config/moonraker.conf.sample" \

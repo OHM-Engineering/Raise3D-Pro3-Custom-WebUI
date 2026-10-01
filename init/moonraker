@@ -22,12 +22,19 @@ SSD=/sbin/start-stop-daemon
 # Klipper source tree, and resolves symlinks (a symlink would resolve into it).
 MNT=$MR/printer_data/config
 VENDOR=/opt/Raise3D/klipper-master/config
+# Also expose the stock Raise3D settings dir (e2config.cfg, hotend.cfg, ...) as
+# a "raise3d" subfolder of the config root so it is viewable/editable in the UI.
+VENDOR_CFG=/opt/Raise3D/config
+MNT_CFG=$MNT/raise3d
 [ -f "$CERTIFI" ] && export SSL_CERT_FILE="$CERTIFI"
 mount_config() {
     mkdir -p "$MNT"
     grep -q " $MNT " /proc/mounts || mount --bind "$VENDOR" "$MNT" 2>/dev/null || true
+    mkdir -p "$MNT_CFG"
+    grep -q " $MNT_CFG " /proc/mounts || mount --bind "$VENDOR_CFG" "$MNT_CFG" 2>/dev/null || true
 }
 umount_config() {
+    grep -q " $MNT_CFG " /proc/mounts && umount "$MNT_CFG" 2>/dev/null || true
     grep -q " $MNT " /proc/mounts && umount "$MNT" 2>/dev/null || true
 }
 case "$1" in
