@@ -12,7 +12,7 @@
  │    └── webhooks UDS comms/klippy.sock <── Moonraker (JSON-RPC API)          │
  │                                                                             │
  │  Moonraker :7125  (python3.11 venv) ──JSON-RPC──> klippy.sock               │
- │  webui.py  :80    Fluidd static + /camera/* proxy ──> MXCCameraServer :30216│
+ │  webui.py  :80    Fluidd/Mainsail + /camera/* proxy ─> MXCCameraServer :30216│
  │  MXCCameraServer :30216  (owns /dev/video1)                                 │
  └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -61,13 +61,13 @@ path (so `SAVE_CONFIG`/the stock UI are unaffected). See
 
 | Path | Role |
 |---|---|
-| `webui/webui.py` | Port‑80 HTTP server: serves the Fluidd build and proxies the camera. |
+| `webui/webui.py` | Port‑80 HTTP server: serves the Fluidd or Mainsail build (`R3D_WEBROOT`) and proxies the camera. |
 | `panel/moonui.py` | Immediate-mode (Pillow) touch UI; draws 600×1024 portrait, rotated into the 1024×600 framebuffer; talks to Moonraker over HTTP. |
-| `init/moonraker`, `init/fluidd` | SysV init services (auto-start on boot). |
+| `init/moonraker`, `init/webui` | SysV init services (auto-start on boot). `init/webui` is a template instantiated for `fluidd` or `mainsail`. |
 | `config/moonraker.conf.sample` | Moonraker config tuned for this device. |
 
 ## Startup order
 
-`rc5.d`: `S01xserver-nodm` (X + `MXCUI`, which starts Klipper) → `S99fluidd` (port 80) →
-`S99moonraker`. Moonraker simply retries the Klipper socket until it appears, so exact
+`rc5.d`: `S01xserver-nodm` (X + `MXCUI`, which starts Klipper) → `S99fluidd` (or
+`S99mainsail`, port 80) → `S99moonraker`. Moonraker simply retries the Klipper socket until it appears, so exact
 ordering is not critical.

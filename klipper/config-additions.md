@@ -16,7 +16,7 @@ section if it isn't already present:
 
 ## `CANCEL_PRINT` macro
 
-Fluidd warns that it can't find a `CANCEL_PRINT` macro. This vendor Klipper already provides
+The web UI (Fluidd/Mainsail) warns that it can't find a `CANCEL_PRINT` macro. This vendor Klipper already provides
 `CANCEL_PRINT` as a **built-in command** (from `[pause_resume]`), but frontends expect a
 `[gcode_macro CANCEL_PRINT]`. Define one that simply renames and calls the built-in, so
 behaviour is unchanged:
@@ -60,7 +60,7 @@ soft restart via Moonraker is enough:
 curl -s -X POST "http://127.0.0.1:7125/printer/gcode/script?script=RESTART" >/dev/null
 ```
 
-Then check Fluidd's warnings are gone and `CANCEL_PRINT` resolves:
+Then check the web UI's warnings are gone and `CANCEL_PRINT` resolves:
 
 ```sh
 curl -s "http://127.0.0.1:7125/printer/gcode/help" | tr ',' '\n' | grep -i cancel

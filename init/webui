@@ -1,17 +1,21 @@
 #!/bin/sh
 ### BEGIN INIT INFO
-# Provides:          fluidd
+# Provides:          @WEBUI@
 # Required-Start:    $network
 # Required-Stop:     $network
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: Fluidd web UI + camera proxy (port 80)
+# Short-Description: @WEBUI@ web UI + camera proxy (port 80)
 ### END INIT INFO
-NAME=fluidd
+# The @WEBUI@ placeholder is substituted by install.sh (fluidd or mainsail).
+NAME=@WEBUI@
 DAEMON=/opt/moonraker/python/bin/python3.11
 DAEMON_ARGS="/opt/moonraker/webui.py 80"
-PIDFILE=/var/run/fluidd.pid
+PIDFILE=/var/run/@WEBUI@.pid
 LOGFILE=/opt/moonraker/printer_data/logs/webui.log
+# Tell webui.py which static build to serve (Fluidd / Mainsail).
+R3D_WEBROOT=/opt/moonraker/www/@WEBUI@
+export R3D_WEBROOT
 SSD=/sbin/start-stop-daemon
 case "$1" in
   start)

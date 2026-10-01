@@ -5,12 +5,13 @@
 # Installs, alongside the stock Raise3D software (nothing here rotates the
 # X session or replaces MXCUI):
 #   * a modern Python 3.11 (portable armv7 build)
-#   * Moonraker (from source) + Fluidd on :80, with a camera proxy
+#   * Moonraker (from source) + Fluidd or Mainsail on :80, with a camera proxy
 #   * an optional on-panel touch UI (rotated to match the portrait panel)
 #   * SysV init services that auto-start on boot
 #
 # Self-contained: run it from anywhere, or pipe it, as root on the printer.
-#     ./install.sh                     # everything
+#     ./install.sh                     # everything (asks for the web UI)
+#     ./install.sh --webui mainsail    # Mainsail instead of Fluidd
 #     ./install.sh --no-panel          # web UI only
 #     ./install.sh --no-webui          # panel UI only
 #     ./install.sh --subnet 192.168.1.0/24
@@ -30,6 +31,7 @@ LIBSODIUM_URL="${LIBSODIUM_URL:-https://github.com/jedisct1/libsodium/releases/d
 FREETYPE_URL="${FREETYPE_URL:-https://github.com/freetype/freetype/releases/download/VER-2-13-2/freetype-2.13.2.tar.gz}"
 MOONRAKER_URL="${MOONRAKER_URL:-https://github.com/Arksine/moonraker/archive/refs/heads/master.tar.gz}"
 FLUIDD_URL="${FLUIDD_URL:-https://github.com/fluidd-core/fluidd/releases/latest/download/fluidd.zip}"
+MAINSAIL_URL="${MAINSAIL_URL:-https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip}"
 
 MR=/opt/moonraker
 VENV="$MR/venv"
@@ -43,6 +45,7 @@ SOCK="$MR/printer_data/comms/klippy.sock"
 DO_WEBUI=1
 DO_PANEL=1
 DO_RESTART_KLIPPER=0
+WEBUI=""
 SUBNET=""
 ASSUME_YES=0
 
@@ -58,11 +61,12 @@ usage() {
     cat <<'USAGE'
 Raise3D Pro3 / Pro3 HyperSpeed — one-shot installer
 
-  ./install.sh [--no-panel] [--no-webui] [--subnet X.X.X.0/24]
-               [--restart-klipper] [-y|--yes]
+  ./install.sh [--no-panel] [--no-webui] [--webui fluidd|mainsail]
+               [--subnet X.X.X.0/24] [--restart-klipper] [-y|--yes]
 
   --no-panel         skip the on-panel touch UI
-  --no-webui         skip Moonraker + Fluidd
+  --no-webui         skip Moonraker + the web UI
+  --webui NAME       web UI frontend: fluidd (default) or mainsail
   --subnet CIDR      trusted LAN subnet for Moonraker auth (auto-detected, /24)
   --restart-klipper  restart Klipper now to activate the API socket
   -y, --yes          no prompts
@@ -75,6 +79,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --no-webui) DO_WEBUI=0 ;;
         --no-panel) DO_PANEL=0 ;;
+        --webui) shift; WEBUI="${1:-}" ;;
+        --webui=*) WEBUI="${1#*=}" ;;
         --restart-klipper) DO_RESTART_KLIPPER=1 ;;
         --subnet) shift; SUBNET="${1:-}" ;;
         --subnet=*) SUBNET="${1#*=}" ;;
@@ -86,6 +92,28 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$DO_WEBUI" = 1 ] || [ "$DO_PANEL" = 1 ] || die "nothing to do (both --no-webui and --no-panel)"
+
+# ------------------------------------------------------------------ web UI choice
+# Pick the web UI frontend: --webui fluidd|mainsail, else ask (default fluidd).
+case "$WEBUI" in
+    "")
+        if [ "$DO_WEBUI" = 1 ] && [ "$ASSUME_YES" != 1 ] && [ -r /dev/tty ]; then
+            printf '[install] Web UI — [1] Fluidd (default)  [2] Mainsail [1/2]: '
+            read -r wsel < /dev/tty || wsel=""
+            case "$wsel" in
+                2|m|M|mainsail|Mainsail) WEBUI=mainsail ;;
+                *) WEBUI=fluidd ;;
+            esac
+        else
+            WEBUI=fluidd
+        fi
+        ;;
+    fluidd|mainsail) ;;
+    *) die "unknown web UI: $WEBUI (use fluidd or mainsail)" ;;
+esac
+if [ "$DO_WEBUI" = 1 ]; then
+    log "web UI frontend: $WEBUI"
+fi
 
 # ------------------------------------------------------------------ disclaimer
 cat <<'DISCLAIMER'
@@ -232,6 +260,90 @@ gcode =
 EOF
 fi
 
+# Shell-command helper: lets macros run host commands. Used below to expose a
+# RESTART_MXCUI macro so offset edits made in the web UI can be applied without
+# the on-screen wizard (MXCUI only reads its cfg files at start).
+cp "$HERE/klipper/gcode_shell_command.py" "$KL_Dir/klippy/extras/gcode_shell_command.py"
+cp "$HERE/scripts/restart-mxcui.sh" /opt/Raise3D/restart-mxcui.sh
+chmod +x /opt/Raise3D/restart-mxcui.sh
+if ! grep -q '^\[gcode_shell_command restart_mxcui\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_shell_command restart_mxcui]
+command: /opt/Raise3D/restart-mxcui.sh
+timeout: 30.
+verbose: True
+
+[gcode_macro RESTART_MXCUI]
+description = Restart the stock Raise3D touch UI (reloads settings files)
+gcode =
+	RUN_SHELL_COMMAND CMD=restart_mxcui
+EOF
+fi
+
+# Fan macros: this Klipper fork has four PWM fans ([fan] pin/pin1/pin2/pin3 =
+# left head, right head, P2, P3), and its mingled M107/P255 "all" path only
+# stops the first two, so switch each one explicitly. Shows up as a button in
+# the web UI when the macro is pinned.
+if ! grep -q '^\[gcode_macro FANS_OFF\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_macro FANS_OFF]
+description = Turn off all fans (left/right head + P2 + P3)
+gcode =
+	M106 P0 S0
+	M106 P1 S0
+	M106 P2 S0
+	M106 P3 S0
+
+[gcode_macro FANS_ON]
+description = Turn all fans to 100%
+gcode =
+	M106 P0 S255
+	M106 P1 S255
+	M106 P2 S255
+	M106 P3 S255
+EOF
+fi
+
+# Head-fan reset: the HCB head fans are thermostatic and ignore host fan
+# commands (M106 P*/M5100 G* F*), so a stuck-on fan is cleared by rebooting the
+# head controller (M5100 RESET). That puts Klipper in shutdown, so the helper
+# script follows up with a FIRMWARE_RESTART and waits for ready.
+cp "$HERE/scripts/reset-heads.sh" /opt/Raise3D/reset-heads.sh
+chmod +x /opt/Raise3D/reset-heads.sh
+if ! grep -q '^\[gcode_macro RESET_HEAD_FANS\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_shell_command reset_head_fans]
+command = /opt/Raise3D/reset-heads.sh
+timeout = 60.
+verbose = False
+
+[gcode_macro RESET_HEAD_FANS]
+description = Reboot mainboard/HCB to clear stuck head fans (then auto-recovers)
+gcode =
+	RUN_SHELL_COMMAND CMD=reset_head_fans
+EOF
+fi
+
+# LED macros: the vendor light module drives both head LEDs through the HCB
+# via M355 (MXCUI's own convention: S1 = on, S0 = off).
+if ! grep -q '^\[gcode_macro LEDS_ON\]' "$KCFG"; then
+    cat >> "$KCFG" <<'EOF'
+
+[gcode_macro LEDS_ON]
+description = Turn on the chamber LEDs (both heads)
+gcode =
+	M355 S1
+
+[gcode_macro LEDS_OFF]
+description = Turn off the chamber LEDs (both heads)
+gcode =
+	M355 S0
+EOF
+fi
+
 # ================================================================== 7. Moonraker
 if [ "$DO_WEBUI" = 1 ]; then
     log "== [7/10] Moonraker =="
@@ -247,6 +359,11 @@ if [ "$DO_WEBUI" = 1 ]; then
     mkdir -p "$MR/printer_data/config"
     grep -q " $MR/printer_data/config " /proc/mounts \
         || mount --bind "$KL_Dir/config" "$MR/printer_data/config" 2>/dev/null || true
+    # Also expose the stock Raise3D settings dir (e2config.cfg, hotend.cfg, ...)
+    # as a "raise3d" subfolder of the config root so it is viewable/editable.
+    mkdir -p "$MR/printer_data/config/raise3d"
+    grep -q " $MR/printer_data/config/raise3d " /proc/mounts \
+        || mount --bind /opt/Raise3D/config "$MR/printer_data/config/raise3d" 2>/dev/null || true
     if [ ! -f "$MR/printer_data/moonraker.conf" ]; then
         sed "s#192.168.1.0/24#${SUBNET:-192.168.1.0/24}#" \
             "$HERE/config/moonraker.conf.sample" \
@@ -259,12 +376,16 @@ fi
 
 # ================================================================== 8. Web UI
 if [ "$DO_WEBUI" = 1 ]; then
-    log "== [8/10] Fluidd + camera proxy =="
+    log "== [8/10] $WEBUI + camera proxy =="
     mkdir -p "$MR/www"
-    if [ ! -f "$MR/www/fluidd/index.html" ]; then
-        curl -k -L -f --retry 3 -o /tmp/fluidd.zip "$FLUIDD_URL"
-        rm -rf "$MR/www/fluidd" && mkdir -p "$MR/www/fluidd"
-        "$PY" -c "import zipfile; zipfile.ZipFile('/tmp/fluidd.zip').extractall('$MR/www/fluidd')"
+    case "$WEBUI" in
+        mainsail) WEBUI_URL="$MAINSAIL_URL" ;;
+        *)        WEBUI_URL="$FLUIDD_URL" ;;
+    esac
+    if [ ! -f "$MR/www/$WEBUI/index.html" ]; then
+        curl -k -L -f --retry 3 -o "/tmp/$WEBUI.zip" "$WEBUI_URL"
+        rm -rf "$MR/www/$WEBUI" && mkdir -p "$MR/www/$WEBUI"
+        "$PY" -c "import zipfile; zipfile.ZipFile('/tmp/$WEBUI.zip').extractall('$MR/www/$WEBUI')"
     fi
     cp "$HERE/webui/webui.py" "$MR/webui.py"
 else
@@ -275,15 +396,28 @@ fi
 if [ "$DO_WEBUI" = 1 ]; then
     log "== [9/10] Init services =="
     cp "$HERE/init/moonraker" /etc/init.d/moonraker
-    cp "$HERE/init/fluidd"    /etc/init.d/fluidd
-    chmod +x /etc/init.d/moonraker /etc/init.d/fluidd
+    # Drop any previously-installed web UI service (e.g. switching frontends) so
+    # only the chosen one binds port 80.
+    for f in fluidd mainsail; do
+        if [ "$f" != "$WEBUI" ]; then
+            if [ -x "/etc/init.d/$f" ]; then
+                "/etc/init.d/$f" stop >/dev/null 2>&1 || true
+            fi
+            rm -f "/etc/init.d/$f" "/var/run/$f.pid"
+            for rl in 0 1 2 3 4 5 6; do
+                rm -f "/etc/rc$rl.d/S99$f" "/etc/rc$rl.d/K01$f"
+            done
+        fi
+    done
+    sed "s#@WEBUI@#$WEBUI#g" "$HERE/init/webui" > "/etc/init.d/$WEBUI"
+    chmod +x /etc/init.d/moonraker "/etc/init.d/$WEBUI"
     for rl in 2 3 4 5; do
         ln -sf ../init.d/moonraker "/etc/rc$rl.d/S99moonraker"
-        ln -sf ../init.d/fluidd    "/etc/rc$rl.d/S99fluidd"
+        ln -sf "../init.d/$WEBUI"  "/etc/rc$rl.d/S99$WEBUI"
     done
     for rl in 0 1 6; do
         ln -sf ../init.d/moonraker "/etc/rc$rl.d/K01moonraker"
-        ln -sf ../init.d/fluidd    "/etc/rc$rl.d/K01fluidd"
+        ln -sf "../init.d/$WEBUI"  "/etc/rc$rl.d/K01$WEBUI"
     done
 else
     log "== [9/10] Init services skipped (--no-webui) =="
@@ -308,7 +442,7 @@ fi
 # ================================================================== start
 if [ "$DO_WEBUI" = 1 ]; then
     log "starting services"
-    /etc/init.d/fluidd start  || warn "fluidd start failed"
+    /etc/init.d/"$WEBUI" start || warn "$WEBUI start failed"
     /etc/init.d/moonraker start || warn "moonraker start failed"
 fi
 
@@ -329,7 +463,7 @@ IPADDR=$(ifconfig wlan0 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
 cat <<EOF
 
 [install] Done.
-  Web UI:     http://$IPADDR/          (Fluidd)
+  Web UI:     http://$IPADDR/          ($WEBUI)
   Moonraker:  http://$IPADDR:7125/
   Panel UI:   $MR/start-ui.sh   (Exit button returns to the stock UI)
 

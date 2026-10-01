@@ -1,13 +1,13 @@
 # Raise3D Pro3 — Klipper/Moonraker web UI + on‑panel touch UI
 
-Add a modern web interface (**Fluidd**) and a **custom touch UI** to a **Raise3D Pro3 /
-Pro3 HyperSpeed** — *without* giving up the stock Raise3D software.
+Add a modern web interface (**Fluidd** or **Mainsail**) and a **custom touch UI** to a
+**Raise3D Pro3 / Pro3 HyperSpeed** — *without* giving up the stock Raise3D software.
 
 Everything here is **additive**:
 
 - The stock `MXCUI` touchscreen keeps working (Klipper is untouched apart from enabling its
   API socket, and the X session / display rotation is **not** changed).
-- The camera keeps streaming to the stock UI/cloud, and is **also** shown in Fluidd via a
+- The camera keeps streaming to the stock UI/cloud, and is **also** shown in the web UI via a
   small local proxy.
 - Moonraker and the web UI run alongside `MXC*` and auto‑start on boot.
 
@@ -21,8 +21,8 @@ Everything here is **additive**:
 | Component | Description |
 |---|---|
 | **Moonraker** | Klipper API server on `:7125`, installed from source into a modern Python 3.11 venv. |
-| **Fluidd** | Web UI on `:80`, served together with a camera proxy by `webui/webui.py`. |
-| **Config editing** | Edit the Klipper config (`printer_raise3d_pro3.cfg`) and `moonraker.conf` in Fluidd's built‑in code editor (safe bind‑mount setup; see docs). |
+| **Web UI** | **Fluidd** or **Mainsail** on `:80` (your choice), served together with a camera proxy by `webui/webui.py`. |
+| **Config editing** | Edit the Klipper config (`printer_raise3d_pro3.cfg`) and `moonraker.conf` in the web UI's built‑in code editor (safe bind‑mount setup; see docs). |
 | **Camera proxy** | Re‑streams the stock `MXCCameraServer` MJPEG without disturbing it. |
 | **Panel UI** | `panel/moonui.py` — a native touch UI that renders on the printer's portrait screen (Move / Heat / Print). |
 | **Init scripts** | SysV init services for Moonraker and the web UI, wired into `rc5.d`. |
@@ -89,10 +89,18 @@ downloads and builds everything on the device and starts the services. Pass flag
 
 ```
 --no-panel          skip the on-panel touch UI
---no-webui          skip Moonraker + Fluidd
+--no-webui          skip Moonraker + the web UI
+--webui NAME        web UI frontend: fluidd (default) or mainsail
 --subnet X.X.X.0/24 trusted LAN subnet for Moonraker auth (auto-detected, /24)
 --restart-klipper   restart Klipper now to activate the API socket
 -y, --yes           no prompts
+```
+
+If you don't pass `--webui`, the installer asks which frontend to install (Fluidd is the
+default; `--yes` skips the prompt and uses Fluidd). For example, to install Mainsail:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/OHM-Engineering/Raise3D-Pro3-Custom-WebUI/main/install.sh | sh -s -- --webui mainsail
 ```
 
 Then open:
@@ -114,8 +122,8 @@ same steps explained manually.
 install.sh        Self-contained one-shot installer (generated — see tools/)
 tools/            install.sh.in template + build-installer.py (embeds the files)
 panel/            On-screen touch UI (Python + Pillow) and helper scripts
-webui/            Port‑80 server: Fluidd static files + camera MJPEG/JPEG proxy
-init/             SysV init scripts (moonraker, fluidd)
+webui/            Port‑80 server: Fluidd/Mainsail static files + camera MJPEG/JPEG proxy
+init/             SysV init scripts (moonraker, webui)
 config/           Sample Moonraker configuration
 klipper/          Klipper changes: enable API socket, add display_status / CANCEL_PRINT
 docs/             Install guide, panel UI notes, camera notes, troubleshooting
@@ -131,7 +139,7 @@ any of them, regenerate with `python3 tools/build-installer.py`.
 
 ```
                     +------------------ printer (i.MX6, 1024x600 portrait) ------------------+
-  Fluidd (browser)  |  webui.py :80  ---- static Fluidd + /camera/* proxy --> MXCCameraServer  |
+  web UI (browser)  |  webui.py :80  ---- Fluidd/Mainsail + /camera/* proxy --> MXCCameraServer|
   -------:7125----->|  Moonraker :7125 --UDS--> Klipper (webhooks API socket)                 |
   touchscreen       |  MXCUI (stock)  <--pty console--  Klipper                                 |
   custom panel UI   |  moonui.py (X client on :0, rotated 90 deg)                              |

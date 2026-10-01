@@ -75,8 +75,8 @@ mount --bind /opt/Raise3D/klipper-master/config /opt/moonraker/printer_data/conf
 ```
 
 `init/moonraker` (re)creates the mount at boot; `check_klipper_config_path` is `False`
-because the reported Klipper path differs from the mount path. Result: Fluidd's editor can
-edit `printer_raise3d_pro3.cfg`, and writes land in the real file.
+because the reported Klipper path differs from the mount path. Result: the web UI's editor
+can edit `printer_raise3d_pro3.cfg`, and writes land in the real file.
 
 ## Build fails: `arm-linux-gnueabihf-gcc` not found
 

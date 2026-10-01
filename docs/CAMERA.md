@@ -25,12 +25,12 @@ Basic auth header when proxying.
 
 ## Proxy (`webui/webui.py`)
 
-The proxy is part of the port‑80 server (same origin as Fluidd, so no CORS/token issues):
+The proxy is part of the port‑80 server (same origin as the web UI, so no CORS/token issues):
 
 - `GET /camera/stream`   → MJPEG from `/api/v1/camera/stream`
 - `GET /camera/snapshot` → JPEG from `/api/v1/camera/takeshot`
 
-Fluidd is pointed at it via Moonraker (relative URLs):
+The web UI (Fluidd or Mainsail) is pointed at it via Moonraker (relative URLs):
 
 ```ini
 [webcam printer]

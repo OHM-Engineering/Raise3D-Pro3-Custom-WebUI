@@ -29,8 +29,11 @@ EMBEDS = [
     ("panel/stop-ui.sh", "__EMBED_STOP_UI_SH__"),
     ("panel/render-ui.sh", "__EMBED_RENDER_UI_SH__"),
     ("init/moonraker", "__EMBED_INIT_MOONRAKER__"),
-    ("init/fluidd", "__EMBED_INIT_FLUIDD__"),
+    ("init/webui", "__EMBED_INIT_WEBUI__"),
     ("config/moonraker.conf.sample", "__EMBED_MOONRAKER_CONF__"),
+    ("klipper/gcode_shell_command.py", "__EMBED_GCODE_SHELL_COMMAND_PY__"),
+    ("scripts/restart-mxcui.sh", "__EMBED_RESTART_MXCUI_SH__"),
+    ("scripts/reset-heads.sh", "__EMBED_RESET_HEADS_SH__"),
 ]
 
 
@@ -42,7 +45,8 @@ def build() -> None:
     lines = [
         "# --- embedded auxiliary files (written to a temp staging dir) ---",
         "STAGE=$(mktemp -d /tmp/r3d-install.XXXXXX 2>/dev/null || echo /tmp/r3d-install.$$)",
-        'mkdir -p "$STAGE/panel" "$STAGE/webui" "$STAGE/init" "$STAGE/config"',
+        'mkdir -p "$STAGE/panel" "$STAGE/webui" "$STAGE/init" "$STAGE/config" \\',
+        '         "$STAGE/klipper" "$STAGE/scripts"',
         "trap 'rm -rf \"$STAGE\"' EXIT INT TERM",
     ]
     for rel, delim in EMBEDS:

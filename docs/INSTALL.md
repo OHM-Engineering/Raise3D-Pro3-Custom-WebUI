@@ -264,33 +264,47 @@ The vendor keeps the Klipper config **inside the Klipper source tree**
 (`/opt/Raise3D/klipper-master/config/`), which Moonraker treats as a **reserved path** and
 refuses to write to (and it resolves symlinks, so a symlink there doesn't help). The bind
 mount above makes the same directory appear at `/opt/moonraker/printer_data/config` —
-outside the reserved tree — so Fluidd's built-in editor can edit
+outside the reserved tree — so the web UI's built-in editor can edit
 `printer_raise3d_pro3.cfg` (and the other files in that folder), while Klipper and the stock
 UI keep using the original path. The provided `init/moonraker` recreates the mount at boot;
 `check_klipper_config_path` is set to `False` because the reported path differs from the
 mount path.
 
-To apply changes: edit in Fluidd → **Save** → **Restart Klipper** (or issue `RESTART`).
+To apply changes: edit in the web UI → **Save** → **Restart Klipper** (or issue `RESTART`).
 
 ---
 
-## 7. Web UI (Fluidd) + camera proxy on port 80
+## 7. Web UI (Fluidd or Mainsail) + camera proxy on port 80
 
-`webui/webui.py` serves the Fluidd static build **and** proxies the stock camera. Install:
+`webui/webui.py` serves the static build of **either frontend** and proxies the stock
+camera. Pick one — **Fluidd** (default) or **Mainsail**:
 
 ```sh
 mkdir -p /opt/moonraker/www
 cd /tmp
+
+# --- Fluidd ---
 curl -k -L -f --retry 3 -o fluidd.zip \
   https://github.com/fluidd-core/fluidd/releases/latest/download/fluidd.zip
 rm -rf /opt/moonraker/www/fluidd && mkdir -p /opt/moonraker/www/fluidd
 /opt/moonraker/python/bin/python3.11 -c \
   "import zipfile; zipfile.ZipFile('/tmp/fluidd.zip').extractall('/opt/moonraker/www/fluidd')"
 
+# --- or Mainsail ---
+# curl -k -L -f --retry 3 -o mainsail.zip \
+#   https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip
+# rm -rf /opt/moonraker/www/mainsail && mkdir -p /opt/moonraker/www/mainsail
+# /opt/moonraker/python/bin/python3.11 -c \
+#   "import zipfile; zipfile.ZipFile('/tmp/mainsail.zip').extractall('/opt/moonraker/www/mainsail')"
+
 # copy the server from this repo
 cp webui/webui.py /opt/moonraker/webui.py
 
-/opt/moonraker/python/bin/python3.11 /opt/moonraker/webui.py 80 &
+# point it at the frontend you installed (defaults to Fluidd)
+R3D_WEBROOT=/opt/moonraker/www/fluidd \
+  /opt/moonraker/python/bin/python3.11 /opt/moonraker/webui.py 80 &
+# ...or /opt/moonraker/www/mainsail for Mainsail.
+
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/          # 200
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/camera/snapshot
 ```
@@ -301,11 +315,13 @@ See [docs/CAMERA.md](CAMERA.md) for how the proxy works.
 
 ## 8. Autostart (SysV init, no systemd)
 
-Copy the init scripts and wire the runlevels:
+Copy the init scripts and wire the runlevels. `init/webui` is a template: substitute
+`@WEBUI@` with the frontend you installed (`fluidd` or `mainsail`). Fluidd below — for
+Mainsail just replace `fluidd` with `mainsail` throughout:
 
 ```sh
 cp init/moonraker /etc/init.d/moonraker
-cp init/fluidd    /etc/init.d/fluidd
+sed 's#@WEBUI@#fluidd#g' init/webui > /etc/init.d/fluidd
 chmod +x /etc/init.d/moonraker /etc/init.d/fluidd
 for rl in 2 3 4 5; do
   ln -sf ../init.d/moonraker /etc/rc$rl.d/S99moonraker
@@ -360,7 +376,7 @@ Then open the web UI from your PC: `http://<printer-ip>/`.
 
 - Klipper: restore `klippy.py.orig-moonraker` and
   `printer_raise3d_pro3.cfg.orig-moonraker`, then restart Klipper.
-- Disable autostart: remove the `/etc/rc*.d/S99moonraker`, `/etc/rc*.d/S99fluidd`
-  symlinks (and the `K01*` ones).
+- Disable autostart: remove the `/etc/rc*.d/S99moonraker` and `/etc/rc*.d/S99fluidd`
+  (or `S99mainsail`) symlinks (and the `K01*` ones).
 - Full removal: delete `/opt/moonraker`, `/usr/local/lib/libsodium*`,
   `/usr/local/lib/libfreetype*`, and the init scripts.

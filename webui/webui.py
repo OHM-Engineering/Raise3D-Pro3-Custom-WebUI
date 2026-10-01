@@ -1,6 +1,6 @@
 #!/opt/moonraker/python/bin/python3.11
 """Combined web UI on port 80:
- - serves Fluidd static files
+ - serves the static Fluidd or Mainsail build (R3D_WEBROOT, default Fluidd)
  - /camera/stream   -> MJPEG proxy of the stock MXCCameraServer
  - /camera/snapshot -> JPEG snapshot proxy
 Reads the live basic-auth token from the MXCCameraServer command line,
@@ -16,7 +16,7 @@ import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-WEBROOT = "/opt/moonraker/www/fluidd"
+WEBROOT = os.environ.get("R3D_WEBROOT", "/opt/moonraker/www/fluidd")
 CAM_HOST = "127.0.0.1"
 CAM_PORT = 30216
 BOUNDARY = "raise3dcameraboundary"
